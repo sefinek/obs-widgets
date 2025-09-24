@@ -1,1 +1,3 @@
-# obs-widgets
+# OBS Widgets
+
+## Date & Time etc.

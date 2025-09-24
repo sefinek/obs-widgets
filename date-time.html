@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Time & Weather Banner</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{background:transparent;font-family:'Orbitron',monospace;display:flex;justify-content:center;align-items:center;min-height:100vh;font-feature-settings:'tnum' 1}
+        .banner{background:rgba(0,0,0,.85);border-radius:16px;padding:28px 31px;display:flex;align-items:center;gap:34px;box-shadow:0 8px 32px rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.1);width:1200px;height:170px}
+        .time-section{text-align:center;flex:0 0 auto;width:200px}
+        .weather-section{text-align:center;flex:0 0 auto;width:240px}
+        .details-section{text-align:center;flex:0 0 auto;width:275px}
+        .label{font-size:.9rem;font-weight:700;text-transform:uppercase;letter-spacing:2px;margin-bottom:12px;opacity:.9}
+        .utc .label{color:#4CAF50}.poland .label{color:#2196F3}.weather .label{color:#FF9800}.details .label{color:#FF9800}
+        .time{font-size:2.8rem;font-weight:900;color:#fff;text-shadow:0 2px 20px rgba(255,255,255,.2);letter-spacing:.5px;margin-bottom:8px;font-variant-numeric:tabular-nums}
+        .date{font-size:1rem;color:rgba(255,255,255,.8);letter-spacing:1px;font-variant-numeric:tabular-nums}
+        .seconds{font-size:1.8rem;color:#ff6b6b;margin-left:8px;animation:pulse 2s ease-in-out infinite}
+        .seconds::before{content:":";margin-right:2px}
+        .colon{animation:blink 2s infinite}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.7}}
+        @keyframes blink{0%,50%{opacity:1}51%,100%{opacity:.3}}
+        .separator{width:2px;height:80px;background:linear-gradient(to bottom,transparent 0%,rgba(255,255,255,.1) 20%,rgba(255,255,255,.4) 50%,rgba(255,255,255,.1) 80%,transparent 100%);flex:0 0 auto}
+        .weather-content{display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:8px}
+        .weather-icon{font-size:3.2rem;filter:drop-shadow(0 2px 8px rgba(0,0,0,.3))}
+        .weather-info{text-align:left}
+        .temperature{font-size:2.8rem;font-weight:900;color:#fff;text-shadow:0 2px 20px rgba(255,255,255,.2);font-variant-numeric:tabular-nums;line-height:1}
+        .description{font-size:.9rem;color:rgba(255,255,255,.8);text-transform:capitalize;margin-top:4px}
+        .location{font-size:.75rem;color:rgba(255,255,255,.6);text-transform:uppercase;letter-spacing:1px}
+        .details-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px}
+        .detail{display:flex;align-items:center;gap:6px;font-size:.8rem;color:rgba(255,255,255,.8);justify-content:flex-start}
+        .detail-icon{font-size:1rem}
+        .source-info{font-size:.6rem;opacity:.7}
+        .loading{opacity:.6;animation:loading 1.5s ease-in-out infinite}
+        @keyframes loading{0%,100%{opacity:.6}50%{opacity:.9}}
+    </style>
+</head>
+<body>
+<div class="banner">
+    <div class="time-section utc">
+        <div class="label">UTC <span id="utc-source" class="source-info">(…)</span></div>
+        <div class="time"><span id="utc-h">00</span><span class="colon">:</span><span id="utc-m">00</span><span class="seconds" id="utc-s">00</span></div>
+        <div class="date" id="utc-d"></div>
+    </div>
+    <div class="separator"></div>
+    <div class="time-section poland">
+        <div class="label">Poland <span id="poland-source" class="source-info">(…)</span></div>
+        <div class="time"><span id="poland-h">00</span><span class="colon">:</span><span id="poland-m">00</span><span class="seconds" id="poland-s">00</span></div>
+        <div class="date" id="poland-d"></div>
+    </div>
+    <div class="separator"></div>
+    <div class="weather-section weather">
+        <div class="label">Weather</div>
+        <div class="weather-content">
+            <div class="weather-icon" id="weather-icon">🌤️</div>
+            <div class="weather-info">
+                <div class="temperature loading" id="temperature">--°C</div>
+                <div class="description loading" id="weather-desc">Loading...</div>
+            </div>
+        </div>
+        <div class="location">West Pomeranian, Poland</div>
+    </div>
+    <div class="separator"></div>
+    <div class="details-section details">
+        <div class="label">Details</div>
+        <div class="details-grid">
+            <div class="detail"><span class="detail-icon">💧</span><span id="humidity">--%</span></div>
+            <div class="detail"><span class="detail-icon">📊</span><span id="pressure">-- hPa</span></div>
+            <div class="detail"><span class="detail-icon">🌬️</span><span id="wind">-- km/h</span></div>
+            <div class="detail"><span class="detail-icon">☀️</span><span id="uv">UV --</span></div>
+            <div class="detail"><span class="detail-icon">👁️</span><span id="visibility">-- km</span></div>
+            <div class="detail"><span class="detail-icon">🌅</span><span id="sun-times">--:-- / --:--</span></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    'use strict';
+    const $=id=>document.getElementById(id);
+    const els={uH:$('utc-h'),uM:$('utc-m'),uS:$('utc-s'),uD:$('utc-d'),pH:$('poland-h'),pM:$('poland-m'),pS:$('poland-s'),pD:$('poland-d'),uSrc:$('utc-source'),pSrc:$('poland-source'),wI:$('weather-icon'),t:$('temperature'),wD:$('weather-desc'),h:$('humidity'),pr:$('pressure'),w:$('wind'),uv:$('uv'),vi:$('visibility'),sun:$('sun-times')};
+
+    let utcEpoch=0,perfAtSync=0,hasUTC=false;
+    function buildMs(d){return Date.UTC(d.year,d.month-1,d.day,d.hour,d.minute,d.seconds,d.milliSeconds||0)}
+    async function syncUTC(){const r=await fetch('https://timeapi.io/api/Time/current/zone?timeZone=UTC');const d=await r.json();const server=buildMs(d);const now=performance.now();utcEpoch=server;perfAtSync=now;hasUTC=true;els.uSrc.textContent='(TimeAPI)'}
+    async function touchPL(){try{const r=await fetch('https://timeapi.io/api/Time/current/zone?timeZone=Europe/Warsaw');await r.json();els.pSrc.textContent='(TimeAPI)'}catch{els.pSrc.textContent='(System)'}}
+
+    const fUTct=new Intl.DateTimeFormat('en-GB',{timeZone:'UTC',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+    const fUTcd=new Intl.DateTimeFormat('en-GB',{timeZone:'UTC',day:'numeric',month:'short',year:'numeric'});
+    const fPLt=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Warsaw',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+    const fPLd=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Warsaw',day:'numeric',month:'short',year:'numeric'});
+    function parts(fmt,ms){const p=fmt.formatToParts(new Date(ms));const o={};for(const x of p)o[x.type]=x.value;return o}
+    function nowUTCms(){return utcEpoch+(performance.now()-perfAtSync)}
+
+    function tick(){
+        if(!hasUTC){requestAnimationFrame(tick);return}
+        const ms=nowUTCms();
+        const ut=parts(fUTct,ms),ud=parts(fUTcd,ms);
+        const pt=parts(fPLt,ms),pd=parts(fPLd,ms);
+        els.uH.textContent=ut.hour;els.uM.textContent=ut.minute;els.uS.textContent=ut.second;els.uD.textContent=`${ud.day} ${ud.month} ${ud.year}`;
+        els.pH.textContent=pt.hour;els.pM.textContent=pt.minute;els.pS.textContent=pt.second;els.pD.textContent=`${pd.day} ${pd.month} ${pd.year}`;
+        const next=1000-Math.floor(ms%1000);setTimeout(tick,next);
+    }
+
+    const weatherIcons={0:{day:'☀️',night:'🌙'},1:{day:'🌤️',night:'🌙'},2:{day:'⛅',night:'☁️'},3:{day:'☁️',night:'☁️'},45:{day:'🌫️',night:'🌫️'},48:{day:'🌫️',night:'🌫️'},51:{day:'🌦️',night:'🌧️'},53:{day:'🌦️',night:'🌧️'},55:{day:'🌦️',night:'🌧️'},61:{day:'🌧️',night:'🌧️'},63:{day:'🌧️',night:'🌧️'},65:{day:'🌧️',night:'🌧️'},71:{day:'🌨️',night:'🌨️'},73:{day:'🌨️',night:'🌨️'},75:{day:'🌨️',night:'🌨️'},95:{day:'⛈️',night:'⛈️'},96:{day:'⛈️',night:'⛈️'},99:{day:'⛈️',night:'⛈️'}};
+    const weatherDescMap={0:'clear sky',1:'mainly clear',2:'partly cloudy',3:'overcast',45:'fog',48:'depositing rime fog',51:'light drizzle',53:'moderate drizzle',55:'dense drizzle',61:'slight rain',63:'moderate rain',65:'heavy rain',71:'slight snow',73:'moderate snow',75:'heavy snow',95:'thunderstorm',96:'thunderstorm with hail',99:'thunderstorm with heavy hail'};
+    const windDirs=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+    function wd(d){return windDirs[Math.round(d/22.5)%16]}
+    function keyPL(){const p=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Warsaw',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',hour12:false}).formatToParts(new Date());const m={};for(const x of p)m[x.type]=x.value;return `${m.year}-${m.month}-${m.day}T${m.hour}:00`}
+
+    async function updateWeather(){
+        try{
+            const res=await fetch('https://api.open-meteo.com/v1/forecast?latitude=53.42&longitude=14.56&current_weather=true&hourly=temperature_2m,relative_humidity_2m,weathercode,pressure_msl,wind_speed_10m,wind_direction_10m,uv_index,visibility&daily=sunrise,sunset&timezone=Europe%2FWarsaw');
+            const data=await res.json();
+            const w=data.current_weather,h=data.hourly,d=data.daily;
+            const idx=h.time.indexOf(keyPL());
+            els.t.textContent=`${Math.round(w.temperature)}°C`;
+            els.wD.textContent=weatherDescMap[w.weathercode]||'unknown';
+            const icon=weatherIcons[w.weathercode];els.wI.textContent=icon?(w.is_day?icon.day:icon.night):'🌤️';
+            if(idx>=0){
+                const rh=h.relative_humidity_2m?.[idx],pr=h.pressure_msl?.[idx],uv=h.uv_index?.[idx],vs=h.visibility?.[idx];
+                els.h.textContent=Number.isFinite(rh)?`${Math.round(rh)}%`:'--%';
+                els.pr.textContent=Number.isFinite(pr)?`${Math.round(pr)} hPa`:'-- hPa';
+                els.uv.textContent=`UV ${Number.isFinite(uv)?Math.round(uv):'--'}`;
+                els.vi.textContent=Number.isFinite(vs)?`${Math.round(vs/1000)} km`:'-- km';
+            }
+            const ws=Math.round(w.windspeed||0),dir=wd(w.winddirection||0);
+            els.w.textContent=`${ws} km/h ${dir}`;
+            if(d.sunrise?.[0]&&d.sunset?.[0]){
+                const sr=new Date(d.sunrise[0]).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+                const ss=new Date(d.sunset[0]).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+                els.sun.textContent=`${sr} / ${ss}`;
+            }
+            els.t.classList.remove('loading');els.wD.classList.remove('loading');
+        }catch{els.t.textContent='--°C';els.wD.textContent='Unavailable'}
+    }
+
+    (async()=>{await syncUTC();touchPL();tick();updateWeather();setInterval(updateWeather,600000);setInterval(async()=>{const before=nowUTCms();try{await syncUTC()}catch{}const after=nowUTCms();const drift=after-before;if(Math.abs(drift)>2000){utcEpoch-=drift}} ,300000)})();
+</script>
+</body>
+</html>
