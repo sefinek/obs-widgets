@@ -109,11 +109,13 @@
     let utcEpoch = 0;
     let performanceAtSync = 0;
     let hasUTCSync = true;
+    let syncInProgress = false;
 
     const WEATHER_UPDATE_INTERVAL = 600000;
     const TIME_SYNC_INTERVAL = 300000;
     const MAX_DRIFT_MS = 2000;
     const DEBUG_ENABLED = true;
+    const WEATHER_COORDS = { lat: 53.42, lon: 14.56 };
 
     const logger = {
         debug: (message, data = null) => {
@@ -155,6 +157,24 @@
 
     const requestCache = new Map();
     const CACHE_DURATION = 10000;
+    const CACHE_CLEANUP_INTERVAL = 60000;
+
+    function cleanupCache() {
+        const now = Date.now();
+        const keysToDelete = [];
+
+        for (const [key, value] of requestCache.entries()) {
+            if (now - value.timestamp > CACHE_DURATION) {
+                keysToDelete.push(key);
+            }
+        }
+
+        keysToDelete.forEach(key => requestCache.delete(key));
+
+        if (keysToDelete.length > 0) {
+            logger.debug('Cache cleanup completed', { removedEntries: keysToDelete.length });
+        }
+    }
 
     function fetchWithTimeout(url) {
         const startTime = performance.now();
@@ -165,24 +185,55 @@
             const cached = requestCache.get(cacheKey);
             if (now - cached.timestamp < CACHE_DURATION) {
                 logger.debug('Using cached request', { url });
-                return Promise.resolve(cached.response.clone());
+                const headers = new Headers();
+                if (cached.headers) {
+                    for (const [key, value] of Object.entries(cached.headers)) {
+                        headers.set(key, value);
+                    }
+                }
+                return Promise.resolve(new Response(cached.data, {
+                    status: cached.status,
+                    statusText: cached.statusText,
+                    headers: headers
+                }));
+            } else {
+                requestCache.delete(cacheKey);
             }
         }
 
         logger.debug('Starting API request', { url });
 
         return fetch(url).then(response => {
-            logger.performance(`API request to ${new URL(url).hostname}`, startTime);
+            const hostname = response.url ? new URL(response.url).hostname : 'unknown';
+            logger.performance(`API request to ${hostname}`, startTime);
             logger.debug('API response received', {
-                url,
+                hostname: hostname,
                 status: response.status,
                 ok: response.ok
             });
 
             if (response.ok) {
-                requestCache.set(cacheKey, {
-                    response: response.clone(),
-                    timestamp: now
+                response.clone().text().then(data => {
+                    try {
+                        requestCache.set(cacheKey, {
+                            data: data,
+                            timestamp: now,
+                            status: response.status,
+                            statusText: response.statusText,
+                            headers: Object.fromEntries(response.headers.entries())
+                        });
+                        logger.debug('Response cached successfully', { url });
+                    } catch (err) {
+                        logger.warn('Failed to cache response', {
+                            url,
+                            error: err.message
+                        });
+                    }
+                }).catch(err => {
+                    logger.warn('Failed to parse response for caching', {
+                        url,
+                        error: err.message
+                    });
                 });
             }
 
@@ -191,6 +242,12 @@
     }
 
     async function syncUTCTime() {
+        if (syncInProgress) {
+            logger.debug('UTC sync already in progress, skipping');
+            return;
+        }
+
+        syncInProgress = true;
         const syncStartTime = performance.now();
         logger.debug('Starting UTC time synchronization');
 
@@ -223,9 +280,11 @@
                 fallback: 'system time'
             });
             utcEpoch = 0;
-            performanceAtSync = 0;
+            performanceAtSync = performance.now();
             elements.utcSource.textContent = '(System)';
             logger.info('Falling back to system time for UTC display');
+        } finally {
+            syncInProgress = false;
         }
     }
 
@@ -302,15 +361,27 @@
     }
 
     function getCurrentUTCTimestamp() {
-        if (utcEpoch > 0) {
-            return utcEpoch + (performance.now() - performanceAtSync);
-        }
-        return Date.now();
+        if (utcEpoch > 0) return utcEpoch + (performance.now() - performanceAtSync);
+
+        const now = new Date();
+        return Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth(),
+            now.getUTCDate(),
+            now.getUTCHours(),
+            now.getUTCMinutes(),
+            now.getUTCSeconds(),
+            now.getUTCMilliseconds()
+        );
     }
 
     let clockUpdateCount = 0;
     let lastClockLogTime = 0;
     let lastDisplayedTime = { utc: '', poland: '', utcDate: '', polandDate: '' };
+    let clockTimeoutId = null;
+    let cleanupIntervalId = null;
+    let weatherIntervalId = null;
+    let syncIntervalId = null;
 
     function updateClockDisplay() {
         if (!hasUTCSync) {
@@ -342,16 +413,18 @@
             lastDisplayedTime.poland = currentPolandTime;
         }
 
-        if (utcTimeParts.second === '00' || !lastDisplayedTime.utcDate) {
+        const shouldUpdateDate = utcTimeParts.second === '00' || polandTimeParts.second === '00' ||
+                                !lastDisplayedTime.utcDate || !lastDisplayedTime.polandDate ||
+                                (clockUpdateCount % 60 === 0);
+
+        if (shouldUpdateDate) {
             const utcDateParts = getFormatterParts(formatters.utcDate, currentTime);
             const currentUtcDate = `${utcDateParts.day} ${utcDateParts.month} ${utcDateParts.year}`;
             if (lastDisplayedTime.utcDate !== currentUtcDate) {
                 elements.utcDate.textContent = currentUtcDate;
                 lastDisplayedTime.utcDate = currentUtcDate;
             }
-        }
 
-        if (polandTimeParts.second === '00' || !lastDisplayedTime.polandDate) {
             const polandDateParts = getFormatterParts(formatters.polandDate, currentTime);
             const currentPolandDate = `${polandDateParts.day} ${polandDateParts.month} ${polandDateParts.year}`;
             if (lastDisplayedTime.polandDate !== currentPolandDate) {
@@ -363,9 +436,10 @@
         if (DEBUG_ENABLED && clockUpdateCount % 30 === 0) {
             const now = Date.now();
             if (now - lastClockLogTime > 30000) {
+                const updateDuration = performance.now() - updateStartTime;
                 logger.debug('Clock performance stats', {
                     updates: clockUpdateCount,
-                    avgUpdateTime: `${((performance.now() - updateStartTime)).toFixed(2)}ms`,
+                    lastUpdateTime: `${updateDuration.toFixed(2)}ms`,
                     usingTimeAPI: utcEpoch > 0,
                     currentUTC: new Date(currentTime).toISOString()
                 });
@@ -373,8 +447,10 @@
             }
         }
 
-        const nextUpdateDelay = 1000 - Math.floor(currentTime % 1000);
-        setTimeout(updateClockDisplay, nextUpdateDelay);
+        const nextUpdateDelay = Math.max(100, 1000 - Math.floor(currentTime % 1000));
+
+        if (clockTimeoutId) clearTimeout(clockTimeoutId);
+        clockTimeoutId = setTimeout(updateClockDisplay, nextUpdateDelay);
     }
 
     const weatherIcons = {
@@ -431,9 +507,17 @@
     function getPolandHourlyKey() {
         const now = Date.now();
         if (now - lastHourlyKeyTime > 300000 || !cachedHourlyKey) {
-            const parts = getFormatterParts(formatters.polandHourly, new Date());
-            cachedHourlyKey = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:00`;
+            cachedHourlyKey = new Date().toLocaleString('en-CA', {
+                timeZone: 'Europe/Warsaw',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                hour12: false
+            }).replace(', ', 'T').substring(0, 13) + ':00';
+
             lastHourlyKeyTime = now;
+            logger.debug('Updated Poland hourly key', { key: cachedHourlyKey });
         }
         return cachedHourlyKey;
     }
@@ -443,7 +527,7 @@
         logger.debug('Starting weather data update');
 
         try {
-            const weatherUrl = 'https://api.open-meteo.com/v1/forecast?latitude=53.42&longitude=14.56&current_weather=true&hourly=temperature_2m,relative_humidity_2m,weathercode,pressure_msl,wind_speed_10m,wind_direction_10m,uv_index,visibility&daily=sunrise,sunset&timezone=Europe%2FWarsaw';
+            const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${WEATHER_COORDS.lat}&longitude=${WEATHER_COORDS.lon}&current_weather=true&hourly=temperature_2m,relative_humidity_2m,weathercode,pressure_msl,wind_speed_10m,wind_direction_10m,uv_index,visibility&daily=sunrise,sunset&timezone=Europe%2FWarsaw`;
             const response = await fetchWithTimeout(weatherUrl);
             const weatherData = await response.json();
 
@@ -458,7 +542,7 @@
             const hourly = weatherData.hourly;
             const daily = weatherData.daily;
             const currentHourKey = getPolandHourlyKey();
-            const currentHourIndex = hourly.time.indexOf(currentHourKey);
+            const currentHourIndex = hourly?.time?.indexOf(currentHourKey) ?? -1;
 
             logger.debug('Weather data processing', {
                 temperature: current.temperature,
@@ -475,7 +559,7 @@
             elements.weatherIcon.textContent = iconData
                 ? (current.is_day ? iconData.day : iconData.night)
                 : '🌤️';
-            if (currentHourIndex >= 0) {
+            if (currentHourIndex >= 0 && hourly) {
                 const humidity = hourly.relative_humidity_2m?.[currentHourIndex];
                 const pressure = hourly.pressure_msl?.[currentHourIndex];
                 const uvIndex = hourly.uv_index?.[currentHourIndex];
@@ -485,7 +569,19 @@
                 elements.pressure.textContent = Number.isFinite(pressure) ? `${Math.round(pressure)} hPa` : '-- hPa';
                 elements.uv.textContent = `UV ${Number.isFinite(uvIndex) ? Math.round(uvIndex) : '--'}`;
                 elements.visibility.textContent = Number.isFinite(visibility) ? `${Math.round(visibility / 1000)} km` : '-- km';
+            } else {
+                logger.debug('Hourly weather data not available for current time', {
+                    currentHourKey,
+                    availableHours: hourly?.time?.slice(0, 3) || 'none'
+                });
+                elements.humidity.textContent = '--%';
+                elements.pressure.textContent = '-- hPa';
+                elements.uv.textContent = 'UV --';
+                elements.visibility.textContent = '-- km';
             }
+
+            elements.temperature.classList.remove('loading');
+            elements.weatherDescription.classList.remove('loading');
 
             const windSpeed = Math.round(current.windspeed || 0);
             const windDirection = getWindDirection(current.winddirection || 0);
@@ -532,9 +628,9 @@
 
         logger.debug('Starting parallel initialization of APIs');
         const initializationTasks = [
-            syncUTCTime(),
-            checkPolandTimeAPI(),
-            updateWeatherData()
+            void syncUTCTime(),
+            void checkPolandTimeAPI(),
+            void updateWeatherData()
         ];
 
         const results = await Promise.allSettled(initializationTasks);
@@ -547,10 +643,12 @@
         logger.info('Initialization completed', initResults);
         logger.performance('Full application initialization', appStartTime);
 
+        cleanupIntervalId = setInterval(cleanupCache, CACHE_CLEANUP_INTERVAL);
+
         logger.debug('Setting up periodic weather updates', {
             interval: `${WEATHER_UPDATE_INTERVAL / 1000}s`
         });
-        setInterval(() => {
+        weatherIntervalId = setInterval(() => {
             logger.debug('Periodic weather update triggered');
             updateWeatherData();
         }, WEATHER_UPDATE_INTERVAL);
@@ -560,7 +658,7 @@
             maxDrift: `${MAX_DRIFT_MS}ms`
         });
 
-        setInterval(async () => {
+        syncIntervalId = setInterval(async () => {
             logger.debug('Periodic time sync triggered');
             const beforeSync = getCurrentUTCTimestamp();
 
@@ -585,6 +683,14 @@
                 });
             }
         }, TIME_SYNC_INTERVAL);
+
+        window.addEventListener('beforeunload', () => {
+            logger.info('Page unloading - cleaning up intervals');
+            if (clockTimeoutId) clearTimeout(clockTimeoutId);
+            if (cleanupIntervalId) clearInterval(cleanupIntervalId);
+            if (weatherIntervalId) clearInterval(weatherIntervalId);
+            if (syncIntervalId) clearInterval(syncIntervalId);
+        });
 
         logger.info('Time & Weather Banner initialized successfully', {
             totalTime: `${(performance.now() - appStartTime).toFixed(2)}ms`,
