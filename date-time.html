@@ -4,7 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Time & Weather Banner</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+
     <style>
         *{margin:0;padding:0;box-sizing:border-box}
         body{background:transparent;font-family:'Orbitron',monospace;display:flex;justify-content:center;align-items:center;min-height:100vh;font-feature-settings:'tnum' 1}
@@ -149,8 +153,22 @@
         );
     }
 
+    const requestCache = new Map();
+    const CACHE_DURATION = 10000;
+
     function fetchWithTimeout(url) {
         const startTime = performance.now();
+        const cacheKey = url;
+        const now = Date.now();
+
+        if (requestCache.has(cacheKey)) {
+            const cached = requestCache.get(cacheKey);
+            if (now - cached.timestamp < CACHE_DURATION) {
+                logger.debug('Using cached request', { url });
+                return Promise.resolve(cached.response.clone());
+            }
+        }
+
         logger.debug('Starting API request', { url });
 
         return fetch(url).then(response => {
@@ -160,6 +178,14 @@
                 status: response.status,
                 ok: response.ok
             });
+
+            if (response.ok) {
+                requestCache.set(cacheKey, {
+                    response: response.clone(),
+                    timestamp: now
+                });
+            }
+
             return response;
         });
     }
@@ -191,9 +217,9 @@
             logger.info('UTC time synchronized via TimeAPI', {
                 accuracy: `±${Math.abs(timeDifference)}ms`
             });
-        } catch (error) {
+        } catch (err) {
             logger.error('TimeAPI UTC sync failed', {
-                error: error.message,
+                error: err.message,
                 fallback: 'system time'
             });
             utcEpoch = 0;
@@ -219,9 +245,9 @@
             elements.polandSource.textContent = '(TimeAPI)';
             logger.performance('Poland TimeAPI check', checkStartTime);
             logger.info('Poland time will use TimeAPI');
-        } catch (error) {
+        } catch (err) {
             logger.warn('Poland TimeAPI check failed', {
-                error: error.message,
+                error: err.message,
                 fallback: 'system time'
             });
             elements.polandSource.textContent = '(System)';
@@ -284,6 +310,7 @@
 
     let clockUpdateCount = 0;
     let lastClockLogTime = 0;
+    let lastDisplayedTime = { utc: '', poland: '', utcDate: '', polandDate: '' };
 
     function updateClockDisplay() {
         if (!hasUTCSync) {
@@ -296,28 +323,54 @@
         clockUpdateCount++;
 
         const utcTimeParts = getFormatterParts(formatters.utcTime, currentTime);
-        const utcDateParts = getFormatterParts(formatters.utcDate, currentTime);
         const polandTimeParts = getFormatterParts(formatters.polandTime, currentTime);
-        const polandDateParts = getFormatterParts(formatters.polandDate, currentTime);
 
-        elements.utcHour.textContent = utcTimeParts.hour;
-        elements.utcMinute.textContent = utcTimeParts.minute;
-        elements.utcSecond.textContent = utcTimeParts.second;
-        elements.utcDate.textContent = `${utcDateParts.day} ${utcDateParts.month} ${utcDateParts.year}`;
+        const currentUtcTime = `${utcTimeParts.hour}:${utcTimeParts.minute}:${utcTimeParts.second}`;
+        const currentPolandTime = `${polandTimeParts.hour}:${polandTimeParts.minute}:${polandTimeParts.second}`;
 
-        elements.polandHour.textContent = polandTimeParts.hour;
-        elements.polandMinute.textContent = polandTimeParts.minute;
-        elements.polandSecond.textContent = polandTimeParts.second;
-        elements.polandDate.textContent = `${polandDateParts.day} ${polandDateParts.month} ${polandDateParts.year}`;
-        const now = Date.now();
-        if (now - lastClockLogTime > 30000) {
-            logger.debug('Clock performance stats', {
-                updates: clockUpdateCount,
-                avgUpdateTime: `${((performance.now() - updateStartTime)).toFixed(2)}ms`,
-                usingTimeAPI: utcEpoch > 0,
-                currentUTC: new Date(currentTime).toISOString()
-            });
-            lastClockLogTime = now;
+        if (lastDisplayedTime.utc !== currentUtcTime) {
+            elements.utcHour.textContent = utcTimeParts.hour;
+            elements.utcMinute.textContent = utcTimeParts.minute;
+            elements.utcSecond.textContent = utcTimeParts.second;
+            lastDisplayedTime.utc = currentUtcTime;
+        }
+
+        if (lastDisplayedTime.poland !== currentPolandTime) {
+            elements.polandHour.textContent = polandTimeParts.hour;
+            elements.polandMinute.textContent = polandTimeParts.minute;
+            elements.polandSecond.textContent = polandTimeParts.second;
+            lastDisplayedTime.poland = currentPolandTime;
+        }
+
+        if (utcTimeParts.second === '00' || !lastDisplayedTime.utcDate) {
+            const utcDateParts = getFormatterParts(formatters.utcDate, currentTime);
+            const currentUtcDate = `${utcDateParts.day} ${utcDateParts.month} ${utcDateParts.year}`;
+            if (lastDisplayedTime.utcDate !== currentUtcDate) {
+                elements.utcDate.textContent = currentUtcDate;
+                lastDisplayedTime.utcDate = currentUtcDate;
+            }
+        }
+
+        if (polandTimeParts.second === '00' || !lastDisplayedTime.polandDate) {
+            const polandDateParts = getFormatterParts(formatters.polandDate, currentTime);
+            const currentPolandDate = `${polandDateParts.day} ${polandDateParts.month} ${polandDateParts.year}`;
+            if (lastDisplayedTime.polandDate !== currentPolandDate) {
+                elements.polandDate.textContent = currentPolandDate;
+                lastDisplayedTime.polandDate = currentPolandDate;
+            }
+        }
+
+        if (DEBUG_ENABLED && clockUpdateCount % 30 === 0) {
+            const now = Date.now();
+            if (now - lastClockLogTime > 30000) {
+                logger.debug('Clock performance stats', {
+                    updates: clockUpdateCount,
+                    avgUpdateTime: `${((performance.now() - updateStartTime)).toFixed(2)}ms`,
+                    usingTimeAPI: utcEpoch > 0,
+                    currentUTC: new Date(currentTime).toISOString()
+                });
+                lastClockLogTime = now;
+            }
         }
 
         const nextUpdateDelay = 1000 - Math.floor(currentTime % 1000);
@@ -372,9 +425,17 @@
         return windDirs[Math.round(degrees / 22.5) % 16];
     }
 
+    let cachedHourlyKey = '';
+    let lastHourlyKeyTime = 0;
+
     function getPolandHourlyKey() {
-        const parts = getFormatterParts(formatters.polandHourly, new Date());
-        return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:00`;
+        const now = Date.now();
+        if (now - lastHourlyKeyTime > 300000 || !cachedHourlyKey) {
+            const parts = getFormatterParts(formatters.polandHourly, new Date());
+            cachedHourlyKey = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:00`;
+            lastHourlyKeyTime = now;
+        }
+        return cachedHourlyKey;
     }
 
     async function updateWeatherData() {
@@ -451,9 +512,9 @@
                 wind: `${Math.round(current.windspeed || 0)} km/h`,
                 hasDetailedData: currentHourIndex >= 0
             });
-        } catch (error) {
+        } catch (err) {
             logger.error('Weather update failed', {
-                error: error.message,
+                error: err.message,
                 duration: `${(performance.now() - weatherStartTime).toFixed(2)}ms`
             });
             elements.temperature.textContent = '--°C';
@@ -505,8 +566,8 @@
 
             try {
                 await syncUTCTime();
-            } catch (error) {
-                logger.error('Periodic UTC sync failed', { error: error.message });
+            } catch (err) {
+                logger.error('Periodic UTC sync failed', { error: err.message });
             }
 
             const afterSync = getCurrentUTCTimestamp();
