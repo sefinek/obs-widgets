@@ -38,13 +38,13 @@
 <body>
 <div class="banner">
     <div class="time-section utc">
-        <div class="label">UTC <span id="utc-source" class="source-info">(…)</span></div>
+        <div class="label">UTC <span id="utc-source" class="source-info">(System)</span></div>
         <div class="time"><span id="utc-h">00</span><span class="colon">:</span><span id="utc-m">00</span><span class="seconds" id="utc-s">00</span></div>
         <div class="date" id="utc-d"></div>
     </div>
     <div class="separator"></div>
     <div class="time-section poland">
-        <div class="label">Poland <span id="poland-source" class="source-info">(…)</span></div>
+        <div class="label">Poland <span id="poland-source" class="source-info">(System)</span></div>
         <div class="time"><span id="poland-h">00</span><span class="colon">:</span><span id="poland-m">00</span><span class="seconds" id="poland-s">00</span></div>
         <div class="date" id="poland-d"></div>
     </div>
@@ -76,65 +76,459 @@
 
 <script>
     'use strict';
-    const $=id=>document.getElementById(id);
-    const els={uH:$('utc-h'),uM:$('utc-m'),uS:$('utc-s'),uD:$('utc-d'),pH:$('poland-h'),pM:$('poland-m'),pS:$('poland-s'),pD:$('poland-d'),uSrc:$('utc-source'),pSrc:$('poland-source'),wI:$('weather-icon'),t:$('temperature'),wD:$('weather-desc'),h:$('humidity'),pr:$('pressure'),w:$('wind'),uv:$('uv'),vi:$('visibility'),sun:$('sun-times')};
 
-    let utcEpoch=0,perfAtSync=0,hasUTC=false;
-    function buildMs(d){return Date.UTC(d.year,d.month-1,d.day,d.hour,d.minute,d.seconds,d.milliSeconds||0)}
-    async function syncUTC(){const r=await fetch('https://timeapi.io/api/Time/current/zone?timeZone=UTC');const d=await r.json();const server=buildMs(d);const now=performance.now();utcEpoch=server;perfAtSync=now;hasUTC=true;els.uSrc.textContent='(TimeAPI)'}
-    async function touchPL(){try{const r=await fetch('https://timeapi.io/api/Time/current/zone?timeZone=Europe/Warsaw');await r.json();els.pSrc.textContent='(TimeAPI)'}catch{els.pSrc.textContent='(System)'}}
+    const $ = id => document.getElementById(id);
 
-    const fUTct=new Intl.DateTimeFormat('en-GB',{timeZone:'UTC',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
-    const fUTcd=new Intl.DateTimeFormat('en-GB',{timeZone:'UTC',day:'numeric',month:'short',year:'numeric'});
-    const fPLt=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Warsaw',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
-    const fPLd=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Warsaw',day:'numeric',month:'short',year:'numeric'});
-    function parts(fmt,ms){const p=fmt.formatToParts(new Date(ms));const o={};for(const x of p)o[x.type]=x.value;return o}
-    function nowUTCms(){return utcEpoch+(performance.now()-perfAtSync)}
+    const elements = {
+        utcHour: $('utc-h'),
+        utcMinute: $('utc-m'),
+        utcSecond: $('utc-s'),
+        utcDate: $('utc-d'),
+        utcSource: $('utc-source'),
+        polandHour: $('poland-h'),
+        polandMinute: $('poland-m'),
+        polandSecond: $('poland-s'),
+        polandDate: $('poland-d'),
+        polandSource: $('poland-source'),
+        weatherIcon: $('weather-icon'),
+        temperature: $('temperature'),
+        weatherDescription: $('weather-desc'),
+        humidity: $('humidity'),
+        pressure: $('pressure'),
+        wind: $('wind'),
+        uv: $('uv'),
+        visibility: $('visibility'),
+        sunTimes: $('sun-times')
+    };
 
-    function tick(){
-        if(!hasUTC){requestAnimationFrame(tick);return}
-        const ms=nowUTCms();
-        const ut=parts(fUTct,ms),ud=parts(fUTcd,ms);
-        const pt=parts(fPLt,ms),pd=parts(fPLd,ms);
-        els.uH.textContent=ut.hour;els.uM.textContent=ut.minute;els.uS.textContent=ut.second;els.uD.textContent=`${ud.day} ${ud.month} ${ud.year}`;
-        els.pH.textContent=pt.hour;els.pM.textContent=pt.minute;els.pS.textContent=pt.second;els.pD.textContent=`${pd.day} ${pd.month} ${pd.year}`;
-        const next=1000-Math.floor(ms%1000);setTimeout(tick,next);
+    let utcEpoch = 0;
+    let performanceAtSync = 0;
+    let hasUTCSync = true;
+
+    const WEATHER_UPDATE_INTERVAL = 600000;
+    const TIME_SYNC_INTERVAL = 300000;
+    const MAX_DRIFT_MS = 2000;
+    const DEBUG_ENABLED = true;
+
+    const logger = {
+        debug: (message, data = null) => {
+            if (!DEBUG_ENABLED) return;
+            const timestamp = new Date().toISOString();
+            console.log(`[DEBUG ${timestamp}] ${message}`, data || '');
+        },
+        info: (message, data = null) => {
+            const timestamp = new Date().toISOString();
+            console.log(`[INFO ${timestamp}] ${message}`, data || '');
+        },
+        warn: (message, data = null) => {
+            const timestamp = new Date().toISOString();
+            console.warn(`[WARN ${timestamp}] ${message}`, data || '');
+        },
+        error: (message, data = null) => {
+            const timestamp = new Date().toISOString();
+            console.error(`[ERROR ${timestamp}] ${message}`, data || '');
+        },
+        performance: (label, startTime) => {
+            if (!DEBUG_ENABLED) return;
+            const duration = performance.now() - startTime;
+            const timestamp = new Date().toISOString();
+            console.log(`[PERF ${timestamp}] ${label}: ${duration.toFixed(2)}ms`);
+        }
+    };
+
+    function buildTimestamp(dateObj) {
+        return Date.UTC(
+            dateObj.year,
+            dateObj.month - 1,
+            dateObj.day,
+            dateObj.hour,
+            dateObj.minute,
+            dateObj.seconds,
+            dateObj.milliSeconds || 0
+        );
     }
 
-    const weatherIcons={0:{day:'☀️',night:'🌙'},1:{day:'🌤️',night:'🌙'},2:{day:'⛅',night:'☁️'},3:{day:'☁️',night:'☁️'},45:{day:'🌫️',night:'🌫️'},48:{day:'🌫️',night:'🌫️'},51:{day:'🌦️',night:'🌧️'},53:{day:'🌦️',night:'🌧️'},55:{day:'🌦️',night:'🌧️'},61:{day:'🌧️',night:'🌧️'},63:{day:'🌧️',night:'🌧️'},65:{day:'🌧️',night:'🌧️'},71:{day:'🌨️',night:'🌨️'},73:{day:'🌨️',night:'🌨️'},75:{day:'🌨️',night:'🌨️'},95:{day:'⛈️',night:'⛈️'},96:{day:'⛈️',night:'⛈️'},99:{day:'⛈️',night:'⛈️'}};
-    const weatherDescMap={0:'clear sky',1:'mainly clear',2:'partly cloudy',3:'overcast',45:'fog',48:'depositing rime fog',51:'light drizzle',53:'moderate drizzle',55:'dense drizzle',61:'slight rain',63:'moderate rain',65:'heavy rain',71:'slight snow',73:'moderate snow',75:'heavy snow',95:'thunderstorm',96:'thunderstorm with hail',99:'thunderstorm with heavy hail'};
-    const windDirs=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
-    function wd(d){return windDirs[Math.round(d/22.5)%16]}
-    function keyPL(){const p=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Warsaw',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',hour12:false}).formatToParts(new Date());const m={};for(const x of p)m[x.type]=x.value;return `${m.year}-${m.month}-${m.day}T${m.hour}:00`}
+    function fetchWithTimeout(url) {
+        const startTime = performance.now();
+        logger.debug('Starting API request', { url });
 
-    async function updateWeather(){
-        try{
-            const res=await fetch('https://api.open-meteo.com/v1/forecast?latitude=53.42&longitude=14.56&current_weather=true&hourly=temperature_2m,relative_humidity_2m,weathercode,pressure_msl,wind_speed_10m,wind_direction_10m,uv_index,visibility&daily=sunrise,sunset&timezone=Europe%2FWarsaw');
-            const data=await res.json();
-            const w=data.current_weather,h=data.hourly,d=data.daily;
-            const idx=h.time.indexOf(keyPL());
-            els.t.textContent=`${Math.round(w.temperature)}°C`;
-            els.wD.textContent=weatherDescMap[w.weathercode]||'unknown';
-            const icon=weatherIcons[w.weathercode];els.wI.textContent=icon?(w.is_day?icon.day:icon.night):'🌤️';
-            if(idx>=0){
-                const rh=h.relative_humidity_2m?.[idx],pr=h.pressure_msl?.[idx],uv=h.uv_index?.[idx],vs=h.visibility?.[idx];
-                els.h.textContent=Number.isFinite(rh)?`${Math.round(rh)}%`:'--%';
-                els.pr.textContent=Number.isFinite(pr)?`${Math.round(pr)} hPa`:'-- hPa';
-                els.uv.textContent=`UV ${Number.isFinite(uv)?Math.round(uv):'--'}`;
-                els.vi.textContent=Number.isFinite(vs)?`${Math.round(vs/1000)} km`:'-- km';
-            }
-            const ws=Math.round(w.windspeed||0),dir=wd(w.winddirection||0);
-            els.w.textContent=`${ws} km/h ${dir}`;
-            if(d.sunrise?.[0]&&d.sunset?.[0]){
-                const sr=new Date(d.sunrise[0]).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-                const ss=new Date(d.sunset[0]).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-                els.sun.textContent=`${sr} / ${ss}`;
-            }
-            els.t.classList.remove('loading');els.wD.classList.remove('loading');
-        }catch{els.t.textContent='--°C';els.wD.textContent='Unavailable'}
+        return fetch(url).then(response => {
+            logger.performance(`API request to ${new URL(url).hostname}`, startTime);
+            logger.debug('API response received', {
+                url,
+                status: response.status,
+                ok: response.ok
+            });
+            return response;
+        });
     }
 
-    (async()=>{await syncUTC();touchPL();tick();updateWeather();setInterval(updateWeather,600000);setInterval(async()=>{const before=nowUTCms();try{await syncUTC()}catch{}const after=nowUTCms();const drift=after-before;if(Math.abs(drift)>2000){utcEpoch-=drift}} ,300000)})();
+    async function syncUTCTime() {
+        const syncStartTime = performance.now();
+        logger.debug('Starting UTC time synchronization');
+
+        try {
+            const response = await fetchWithTimeout('https://timeapi.io/api/Time/current/zone?timeZone=UTC');
+            const timeData = await response.json();
+            const serverTime = buildTimestamp(timeData);
+            const currentPerformance = performance.now();
+            const systemTime = Date.now();
+            const timeDifference = serverTime - systemTime;
+
+            logger.debug('UTC sync successful', {
+                serverTime: new Date(serverTime).toISOString(),
+                systemTime: new Date(systemTime).toISOString(),
+                difference: `${timeDifference}ms`,
+                timeData
+            });
+
+            utcEpoch = serverTime;
+            performanceAtSync = currentPerformance;
+            elements.utcSource.textContent = '(TimeAPI)';
+
+            logger.performance('UTC time synchronization', syncStartTime);
+            logger.info('UTC time synchronized via TimeAPI', {
+                accuracy: `±${Math.abs(timeDifference)}ms`
+            });
+        } catch (error) {
+            logger.error('TimeAPI UTC sync failed', {
+                error: error.message,
+                fallback: 'system time'
+            });
+            utcEpoch = 0;
+            performanceAtSync = 0;
+            elements.utcSource.textContent = '(System)';
+            logger.info('Falling back to system time for UTC display');
+        }
+    }
+
+    async function checkPolandTimeAPI() {
+        const checkStartTime = performance.now();
+        logger.debug('Checking Poland TimeAPI availability');
+
+        try {
+            const response = await fetchWithTimeout('https://timeapi.io/api/Time/current/zone?timeZone=Europe/Warsaw');
+            const timeData = await response.json();
+
+            logger.debug('Poland TimeAPI check successful', {
+                serverTime: timeData.dateTime,
+                timezone: timeData.timeZone
+            });
+
+            elements.polandSource.textContent = '(TimeAPI)';
+            logger.performance('Poland TimeAPI check', checkStartTime);
+            logger.info('Poland time will use TimeAPI');
+        } catch (error) {
+            logger.warn('Poland TimeAPI check failed', {
+                error: error.message,
+                fallback: 'system time'
+            });
+            elements.polandSource.textContent = '(System)';
+            logger.info('Poland time will use system time');
+        }
+    }
+
+    const formatters = {
+        utcTime: new Intl.DateTimeFormat('en-GB', {
+            timeZone: 'UTC',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+        }),
+        utcDate: new Intl.DateTimeFormat('en-GB', {
+            timeZone: 'UTC',
+            day: 'numeric',
+            month: 'short',
+            year: 'numeric'
+        }),
+        polandTime: new Intl.DateTimeFormat('en-GB', {
+            timeZone: 'Europe/Warsaw',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+        }),
+        polandDate: new Intl.DateTimeFormat('en-GB', {
+            timeZone: 'Europe/Warsaw',
+            day: 'numeric',
+            month: 'short',
+            year: 'numeric'
+        }),
+        polandHourly: new Intl.DateTimeFormat('en-GB', {
+            timeZone: 'Europe/Warsaw',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            hour12: false
+        })
+    };
+
+    function getFormatterParts(formatter, timestamp) {
+        const parts = formatter.formatToParts(new Date(timestamp));
+        const partsObject = {};
+        for (const part of parts) {
+            partsObject[part.type] = part.value;
+        }
+        return partsObject;
+    }
+
+    function getCurrentUTCTimestamp() {
+        if (utcEpoch > 0) {
+            return utcEpoch + (performance.now() - performanceAtSync);
+        }
+        return Date.now();
+    }
+
+    let clockUpdateCount = 0;
+    let lastClockLogTime = 0;
+
+    function updateClockDisplay() {
+        if (!hasUTCSync) {
+            requestAnimationFrame(updateClockDisplay);
+            return;
+        }
+
+        const updateStartTime = performance.now();
+        const currentTime = getCurrentUTCTimestamp();
+        clockUpdateCount++;
+
+        const utcTimeParts = getFormatterParts(formatters.utcTime, currentTime);
+        const utcDateParts = getFormatterParts(formatters.utcDate, currentTime);
+        const polandTimeParts = getFormatterParts(formatters.polandTime, currentTime);
+        const polandDateParts = getFormatterParts(formatters.polandDate, currentTime);
+
+        elements.utcHour.textContent = utcTimeParts.hour;
+        elements.utcMinute.textContent = utcTimeParts.minute;
+        elements.utcSecond.textContent = utcTimeParts.second;
+        elements.utcDate.textContent = `${utcDateParts.day} ${utcDateParts.month} ${utcDateParts.year}`;
+
+        elements.polandHour.textContent = polandTimeParts.hour;
+        elements.polandMinute.textContent = polandTimeParts.minute;
+        elements.polandSecond.textContent = polandTimeParts.second;
+        elements.polandDate.textContent = `${polandDateParts.day} ${polandDateParts.month} ${polandDateParts.year}`;
+        const now = Date.now();
+        if (now - lastClockLogTime > 30000) {
+            logger.debug('Clock performance stats', {
+                updates: clockUpdateCount,
+                avgUpdateTime: `${((performance.now() - updateStartTime)).toFixed(2)}ms`,
+                usingTimeAPI: utcEpoch > 0,
+                currentUTC: new Date(currentTime).toISOString()
+            });
+            lastClockLogTime = now;
+        }
+
+        const nextUpdateDelay = 1000 - Math.floor(currentTime % 1000);
+        setTimeout(updateClockDisplay, nextUpdateDelay);
+    }
+
+    const weatherIcons = {
+        0: { day: '☀️', night: '🌙' },
+        1: { day: '🌤️', night: '🌙' },
+        2: { day: '⛅', night: '☁️' },
+        3: { day: '☁️', night: '☁️' },
+        45: { day: '🌫️', night: '🌫️' },
+        48: { day: '🌫️', night: '🌫️' },
+        51: { day: '🌦️', night: '🌧️' },
+        53: { day: '🌦️', night: '🌧️' },
+        55: { day: '🌦️', night: '🌧️' },
+        61: { day: '🌧️', night: '🌧️' },
+        63: { day: '🌧️', night: '🌧️' },
+        65: { day: '🌧️', night: '🌧️' },
+        71: { day: '🌨️', night: '🌨️' },
+        73: { day: '🌨️', night: '🌨️' },
+        75: { day: '🌨️', night: '🌨️' },
+        95: { day: '⛈️', night: '⛈️' },
+        96: { day: '⛈️', night: '⛈️' },
+        99: { day: '⛈️', night: '⛈️' }
+    };
+
+    const weatherDescMap = {
+        0: 'clear sky',
+        1: 'mainly clear',
+        2: 'partly cloudy',
+        3: 'overcast',
+        45: 'fog',
+        48: 'depositing rime fog',
+        51: 'light drizzle',
+        53: 'moderate drizzle',
+        55: 'dense drizzle',
+        61: 'slight rain',
+        63: 'moderate rain',
+        65: 'heavy rain',
+        71: 'slight snow',
+        73: 'moderate snow',
+        75: 'heavy snow',
+        95: 'thunderstorm',
+        96: 'thunderstorm with hail',
+        99: 'thunderstorm with heavy hail'
+    };
+
+    const windDirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+
+    function getWindDirection(degrees) {
+        return windDirs[Math.round(degrees / 22.5) % 16];
+    }
+
+    function getPolandHourlyKey() {
+        const parts = getFormatterParts(formatters.polandHourly, new Date());
+        return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:00`;
+    }
+
+    async function updateWeatherData() {
+        const weatherStartTime = performance.now();
+        logger.debug('Starting weather data update');
+
+        try {
+            const weatherUrl = 'https://api.open-meteo.com/v1/forecast?latitude=53.42&longitude=14.56&current_weather=true&hourly=temperature_2m,relative_humidity_2m,weathercode,pressure_msl,wind_speed_10m,wind_direction_10m,uv_index,visibility&daily=sunrise,sunset&timezone=Europe%2FWarsaw';
+            const response = await fetchWithTimeout(weatherUrl);
+            const weatherData = await response.json();
+
+            logger.debug('Weather API response received', {
+                hasCurrentWeather: !!weatherData.current_weather,
+                hasHourlyData: !!weatherData.hourly,
+                hasDailyData: !!weatherData.daily,
+                dataTimestamp: weatherData.current_weather?.time
+            });
+
+            const current = weatherData.current_weather;
+            const hourly = weatherData.hourly;
+            const daily = weatherData.daily;
+            const currentHourKey = getPolandHourlyKey();
+            const currentHourIndex = hourly.time.indexOf(currentHourKey);
+
+            logger.debug('Weather data processing', {
+                temperature: current.temperature,
+                weathercode: current.weathercode,
+                windspeed: current.windspeed,
+                currentHourKey,
+                hourlyDataFound: currentHourIndex >= 0
+            });
+
+            elements.temperature.textContent = `${Math.round(current.temperature)}°C`;
+            elements.weatherDescription.textContent = weatherDescMap[current.weathercode] || 'unknown';
+
+            const iconData = weatherIcons[current.weathercode];
+            elements.weatherIcon.textContent = iconData
+                ? (current.is_day ? iconData.day : iconData.night)
+                : '🌤️';
+            if (currentHourIndex >= 0) {
+                const humidity = hourly.relative_humidity_2m?.[currentHourIndex];
+                const pressure = hourly.pressure_msl?.[currentHourIndex];
+                const uvIndex = hourly.uv_index?.[currentHourIndex];
+                const visibility = hourly.visibility?.[currentHourIndex];
+
+                elements.humidity.textContent = Number.isFinite(humidity) ? `${Math.round(humidity)}%` : '--%';
+                elements.pressure.textContent = Number.isFinite(pressure) ? `${Math.round(pressure)} hPa` : '-- hPa';
+                elements.uv.textContent = `UV ${Number.isFinite(uvIndex) ? Math.round(uvIndex) : '--'}`;
+                elements.visibility.textContent = Number.isFinite(visibility) ? `${Math.round(visibility / 1000)} km` : '-- km';
+            }
+
+            const windSpeed = Math.round(current.windspeed || 0);
+            const windDirection = getWindDirection(current.winddirection || 0);
+            elements.wind.textContent = `${windSpeed} km/h ${windDirection}`;
+            if (daily.sunrise?.[0] && daily.sunset?.[0]) {
+                const sunrise = new Date(daily.sunrise[0]).toLocaleTimeString('en-GB', {
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+                const sunset = new Date(daily.sunset[0]).toLocaleTimeString('en-GB', {
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+                elements.sunTimes.textContent = `${sunrise} / ${sunset}`;
+            }
+
+            elements.temperature.classList.remove('loading');
+            elements.weatherDescription.classList.remove('loading');
+
+            logger.performance('Weather data update', weatherStartTime);
+            logger.info('Weather data updated successfully', {
+                temperature: `${Math.round(current.temperature)}°C`,
+                condition: weatherDescMap[current.weathercode] || 'unknown',
+                wind: `${Math.round(current.windspeed || 0)} km/h`,
+                hasDetailedData: currentHourIndex >= 0
+            });
+        } catch (error) {
+            logger.error('Weather update failed', {
+                error: error.message,
+                duration: `${(performance.now() - weatherStartTime).toFixed(2)}ms`
+            });
+            elements.temperature.textContent = '--°C';
+            elements.weatherDescription.textContent = 'Unavailable';
+            logger.info('Weather display set to unavailable state');
+        }
+    }
+
+    (async () => {
+        const appStartTime = performance.now();
+        logger.info('Starting Time & Weather Banner application');
+
+        logger.debug('Starting clock display with system time');
+        updateClockDisplay();
+
+        logger.debug('Starting parallel initialization of APIs');
+        const initializationTasks = [
+            syncUTCTime(),
+            checkPolandTimeAPI(),
+            updateWeatherData()
+        ];
+
+        const results = await Promise.allSettled(initializationTasks);
+        const initResults = {
+            utcSync: results[0].status,
+            polandCheck: results[1].status,
+            weather: results[2].status
+        };
+
+        logger.info('Initialization completed', initResults);
+        logger.performance('Full application initialization', appStartTime);
+
+        logger.debug('Setting up periodic weather updates', {
+            interval: `${WEATHER_UPDATE_INTERVAL / 1000}s`
+        });
+        setInterval(() => {
+            logger.debug('Periodic weather update triggered');
+            updateWeatherData();
+        }, WEATHER_UPDATE_INTERVAL);
+
+        logger.debug('Setting up periodic time synchronization', {
+            interval: `${TIME_SYNC_INTERVAL / 1000}s`,
+            maxDrift: `${MAX_DRIFT_MS}ms`
+        });
+
+        setInterval(async () => {
+            logger.debug('Periodic time sync triggered');
+            const beforeSync = getCurrentUTCTimestamp();
+
+            try {
+                await syncUTCTime();
+            } catch (error) {
+                logger.error('Periodic UTC sync failed', { error: error.message });
+            }
+
+            const afterSync = getCurrentUTCTimestamp();
+            const timeDrift = afterSync - beforeSync;
+
+            if (Math.abs(timeDrift) > MAX_DRIFT_MS) {
+                utcEpoch -= timeDrift;
+                logger.warn('Time drift detected and corrected', {
+                    drift: `${timeDrift}ms`,
+                    threshold: `${MAX_DRIFT_MS}ms`
+                });
+            } else {
+                logger.debug('Time drift within acceptable range', {
+                    drift: `${timeDrift}ms`
+                });
+            }
+        }, TIME_SYNC_INTERVAL);
+
+        logger.info('Time & Weather Banner initialized successfully', {
+            totalTime: `${(performance.now() - appStartTime).toFixed(2)}ms`,
+            debugMode: DEBUG_ENABLED
+        });
+    })();
 </script>
 </body>
 </html>
